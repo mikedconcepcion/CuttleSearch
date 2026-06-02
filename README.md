@@ -32,11 +32,6 @@ and read-only retrieval live **in-process**, so the search server is one binary
 with nothing else installed. It loads a pre-built index snapshot at boot and
 serves ranked search over it.
 
-```
-Lucene        : Elasticsearch   ::   CuttleDB : CuttleSearch
-(retrieval)     (search server)       (retrieval)  (search server)
-```
-
 Pointing the server at a **separate, running CuttleDB** instance (so search
 rides on a database other processes are already writing to) is on the
 [roadmap](ROADMAP.md); today retrieval is in-process over the boot snapshot.

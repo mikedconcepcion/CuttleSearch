@@ -25,30 +25,29 @@ don't *define* it. (Same discipline as CuttleDB: a database, not an
 ## Standalone, pairs best with the family
 
 CuttleSearch is a **standalone product**, exactly like CuttleDB — its own
-binary, its own API, useful on its own with zero other Cuttle components
-installed. It bundles the retrieval substrate the way Elasticsearch
-bundles Lucene.
+API, its own front door, useful on its own with zero other Cuttle
+components installed. It runs on the shared `cuttledb-server` engine (the
+same zero-dependency binary CuttleDB runs on) executing its own assembled
+program, `cuttlesearch.obin`; together they are one copy-and-run unit that
+bundles the retrieval substrate the way Elasticsearch bundles Lucene. You
+never install CuttleDB to use it — the engine ships with CuttleSearch.
 
 It **pairs best with CuttleDB**: if your data already lives in a CuttleDB
 deployment, CuttleSearch becomes the search/relevance layer over it, and
 **CuttleDB governs what is surfaced public vs private**. The two snap
-together because they share the same substrate — but neither requires the
+together because they ride the same engine — but neither requires the
 other.
 
 Mechanically this is two run modes (see [ROADMAP.md](ROADMAP.md) §1):
 
-- **Embedded** (standalone default) — CuttleSearch bundles its own
-  substrate and index files, the way Elasticsearch bundles Lucene.
+- **Embedded** (standalone default) — the `cuttledb-server` engine and the
+  index files travel with CuttleSearch, the way Elasticsearch bundles
+  Lucene.
 - **Attached** (paired, *hyper-optimized*) — CuttleSearch points at an
   existing CuttleDB; CuttleDB governs surfacing and, when co-located in
   the same process, queries take the in-process fast path (~5μs/op) with
   no socket. Standalone always works; pairing is a superpower, never a
   requirement.
-
-```
-Lucene        : Elasticsearch   ::   CuttleDB : CuttleSearch
-(retrieval)     (search server)       (retrieval)  (search server)
-```
 
 ## What CuttleSearch adds (the product surface)
 
