@@ -59,6 +59,25 @@ The index is built **offline** and loaded **read-only at boot** — see
 [deploy/DEPLOY.md](deploy/DEPLOY.md) for building a snapshot, the systemd /
 Docker units, and the VPS walkthrough.
 
+## Embeddable (WASM, in-process)
+
+No server, no socket: the same engine compiled to WebAssembly runs ranked
+search **inside your Node or browser process**. Load a pre-built index
+snapshot and query it in-process.
+
+```js
+import { CuttleSearch } from "./wasm/cuttlesearch.mjs";
+
+const cs   = await CuttleSearch.create();
+const hid  = await cs.loadSnapshot(snapshotBytes);   // Uint8Array of index.snap
+const hits = cs.search(hid, "fox river");            // [{ id, score }, ...]
+```
+
+The kit (`~350 KB` engine + a thin search layer) lives in
+[**wasm/**](wasm/) — see [wasm/README.md](wasm/README.md). For the **full
+database** surface in-process (create / insert / transactions, not just
+search), use CuttleDB's embed kit.
+
 ## Security model & hardening
 
 The HTTP surface is **read-only by construction** — the binary hardcodes the
