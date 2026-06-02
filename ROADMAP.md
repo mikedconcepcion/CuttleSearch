@@ -15,7 +15,7 @@ else:
 
 ## 1. Distribution — how CuttleSearch ships
 
-### The decision: its own binary, built like the rest of the stack
+### The decision: its own front door, built like the rest of the stack
 
 CuttleSearch ships **exactly the way the rest of the stack already ships
 today**: the `cuttledb-server` engine + a compiled program object,
@@ -37,9 +37,10 @@ boundary. The engine is extended **only** where it genuinely lacks a
 retrieval primitive (see §3). Ideal new-engine work: near zero.
 
 > Resolves DEFINITION.md open question *"own binary vs. mode-flag."*
-> **Own binary.** Standalone identity demands its own front door. (It can
-> still be the same CuttleDB engine core under the hood — that's an
-> implementation detail, not the product's face.)
+> **Its own front door, not a mode-flag.** Standalone identity demands its
+> own API and assembled program. (The engine binary under the hood is the
+> same one CuttleDB ships — that's an implementation detail, not the
+> product's face.)
 
 ### Three release carriers — same program, three shells
 
