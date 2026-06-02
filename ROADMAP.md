@@ -7,7 +7,8 @@
 Two questions this doc answers up front, because they decide everything
 else:
 
-1. **How does it ship?** — a self-contained binary (primary), also WASM.
+1. **How does it ship?** — a self-contained binary (primary); a WASM
+   carrier is on the roadmap (§1).
 2. **What does it need from the CuttleDB engine that isn't there yet?**
    — §3, the honest gap list.
 
@@ -50,13 +51,14 @@ transports (`FEATURES.md` §Transports). CuttleSearch inherits all three:
 | Carrier | What it is | Primary use | Status |
 |---|---|---|---|
 | **Native binary** | `cuttlesearch.exe` + `.obin`, a server you run | Servers, Docker, CI, the default | **primary release** |
-| **WASM** | `cuttlesearch.wasm` (~189KB core today), in-process, no socket | Embedded / browser / edge search, no server to run | secondary |
+| **WASM** | the engine compiled to WASM, loading `cuttlesearch.obin` in-process via `cuttledb_exec_line`, no socket | Embedded / browser / edge search, no server to run | **roadmap** — engine WASM build path proven; no packaged `cuttlesearch.wasm` shipped yet |
 | **SDK clients** | `cuttlesearch` on PyPI + npm — thin clients that speak the wire/REST API | App integration | ships with the binary |
 
 So the answer to *"binary or WASM?"* is: **the program is compiled once;
 the primary release is the binary; WASM is the same program in a second
 shell for embedded/browser.** Not either/or — one source, two *builds* of
-it.
+it. Today only the binary ships: the engine's WASM build path is proven,
+but a packaged `cuttlesearch.wasm` is not yet released.
 
 ### Standalone vs. paired — the "hyper-optimize if paired" mechanic
 

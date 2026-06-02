@@ -111,8 +111,9 @@ Perplexity / Tavily / Brave.
 
 - **Own binary, not a mode-flag.** Ships as the `cuttledb-server` engine
   (same as CuttleDB) plus the assembled `cuttlesearch.obin` program, <1 MB,
-  copy-and-run. Standalone identity gets its own front door. Also builds to
-  WASM for embedded/browser.
+  copy-and-run. Standalone identity gets its own front door. A WASM carrier
+  (the engine compiled to WASM, running `cuttlesearch.obin` in-process) is on
+  the roadmap for embedded/browser — not yet packaged.
 - **Bundled engine (embedded) / separate CuttleDB (attached).** Embedded
   mode bundles the CuttleDB engine in-process; attached mode speaks to a
   separate CuttleDB over the wire. Both exist; embedded is the default.
