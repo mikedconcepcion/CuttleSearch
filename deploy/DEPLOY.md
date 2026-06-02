@@ -1,11 +1,11 @@
-# Deploying CuttleSearch (OctoASM binary)
+# Deploying CuttleSearch
 
 CuttleSearch ships as a **copy-and-run** service: one engine binary plus one
 assembled program. There is no install step, no package manager, no language
 runtime to provision.
 
 ```
-cuttledb-server         the zero-dependency engine (closed core, shared with CuttleDB)
+cuttledb-server         the zero-dependency engine (shared with CuttleDB)
 cuttlesearch.obin       the assembled CuttleSearch program (the open product)
 index.snap              the read-only search snapshot (operator-built, optional)
 ```

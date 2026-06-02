@@ -27,9 +27,10 @@ nothing else installed.
 ## Provenance
 
 The engine is not vendored as source into this repository — it ships as a
-prebuilt artifact (the binary *is* the deliverable). The release pipeline
-produces the per-platform binaries and places them here; `cuttlesearch.obin` is
-reproducible from `server/cuttlesearch.oasm` with the matching assembler.
+prebuilt artifact (the binary *is* the deliverable). `cuttlesearch.obin` is the
+assembled program; it is committed and is reproducible from
+`server/cuttlesearch.oasm` with the build toolchain (the toolchain itself is
+not needed to run the product).
 
 This is the **same engine CuttleDB ships** — `cuttledb-server` carries the
 column store, the read-only retrieval opcodes (`db_load`, `db_search`,
@@ -39,17 +40,20 @@ one shared binary, CuttleSearch and CuttleDB move together on one version line
 
 ## Getting the binary
 
-The engine binary is **not committed to this repo** — it ships as a release
-asset (same model as CuttleDB). Download the build for your platform and drop
+The engine binary is **not committed to this repo** — it is the *same shared
+binary* CuttleDB ships, so just download it from the CuttleDB release and drop
 it into `bin/`:
+
+> https://github.com/mikedconcepcion/CuttleDB/releases/latest
 
 - `bin/cuttledb-server.exe` — Windows x64, for local dev
 - `bin/cuttledb-server`     — Linux x64 (glibc), for `deploy/Dockerfile` / systemd
 
-Until the binary is present, `scripts/run.*` and the container build fail at the
-missing-binary step (`COPY bin/cuttledb-server`) — by design, so a
-mismatched-platform binary never ships silently. The v0.8.0 engine is released
-together for CuttleDB and CuttleSearch: one shared binary, one version line.
+The release binaries are sigstore-signed (`.cosign.bundle` files attached to the
+release); verify before use. Until the binary is present, `scripts/run.*` and the
+container build fail at the missing-binary step (`COPY bin/cuttledb-server`) — by
+design, so a mismatched-platform binary never ships silently. The v0.8.0 engine is
+released once for both CuttleDB and CuttleSearch: one shared binary, one version line.
 
-Only `octoasm` (the open assembler that builds `cuttlesearch.obin` from
-`server/cuttlesearch.oasm`) is checked in here.
+Nothing else needs to be checked in here — the assembled program
+(`server/cuttlesearch.obin`) is committed and runs directly on the engine.

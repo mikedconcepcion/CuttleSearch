@@ -1,16 +1,15 @@
 # CuttleSearch — roadmap
 
 > How CuttleSearch gets built and shipped. Checkable against
-> [DEFINITION.md](DEFINITION.md). Where this roadmap and the old
-> `../SearchEngine/ROADMAP.md` disagree, this one wins — that one is the
-> superseded consumer/Perplexity framing.
+> [DEFINITION.md](DEFINITION.md). This roadmap supersedes any earlier
+> consumer/agent framing of the product.
 
 Two questions this doc answers up front, because they decide everything
 else:
 
 1. **How does it ship?** — a self-contained binary (primary), also WASM.
-2. **What does it need from the substrate (OctoASM / CuttleDB) that
-   isn't there yet?** — §3, the honest gap list.
+2. **What does it need from the CuttleDB engine that isn't there yet?**
+   — §3, the honest gap list.
 
 ---
 
@@ -24,19 +23,18 @@ two files, one self-contained unit, **<1 MB, zero deps, copy-and-run.**
 
 ```
 cuttledb-server    (~440KB)  — the CuttleDB engine (shared with CuttleDB)
-cuttlesearch.obin  (~tens KB)— the search-engine program (OctoASM/OctoFlow)
+cuttlesearch.obin  (~tens KB)— the compiled search-engine program
 ────────────────────────────
-  one unit, <1 MB, copy-and-run. Apache-2.0 surface, engine core stays closed.
+  one unit, <1 MB, copy-and-run, zero deps.
 ```
 
 This mirrors the `cuttledb-server` precedent: one shared engine binary plus
 a compiled program object. The search-engine **logic** (ingestion,
 analyzers, mapping, query-DSL parser, the REST/agent API, relevance
-rules) is **written in OctoASM/OctoFlow on top of the substrate** — that
-is where it belongs per `STACK_SOP.md`: it's compute + orchestration, not
-an OS boundary. The engine's C core is touched **only** where the
-substrate genuinely lacks a retrieval primitive (see §3). Ideal new-C
-count: near zero.
+rules) lives in **CuttleSearch's program layer on top of the engine** —
+that is where it belongs: it's compute + orchestration, not an OS
+boundary. The engine is extended **only** where it genuinely lacks a
+retrieval primitive (see §3). Ideal new-engine work: near zero.
 
 > Resolves DEFINITION.md open question *"own binary vs. mode-flag."*
 > **Own binary.** Standalone identity demands its own front door. (It can
@@ -54,11 +52,10 @@ transports (`FEATURES.md` §Transports). CuttleSearch inherits all three:
 | **WASM** | `cuttlesearch.wasm` (~189KB core today), in-process, no socket | Embedded / browser / edge search, no server to run | secondary |
 | **SDK clients** | `cuttlesearch` on PyPI + npm — thin clients that speak the wire/REST API | App integration | ships with the binary |
 
-So the answer to *"binary, OctoASM, or WASM?"* is: **the program is
-written in OctoASM/OctoFlow; the primary release is the binary; WASM is
-the same program in a second shell for embedded/browser.** Not
-either/or — the OctoASM is the *source*, the binary and WASM are two
-*builds* of it.
+So the answer to *"binary or WASM?"* is: **the program is compiled once;
+the primary release is the binary; WASM is the same program in a second
+shell for embedded/browser.** Not either/or — one source, two *builds* of
+it.
 
 ### Standalone vs. paired — the "hyper-optimize if paired" mechanic
 
@@ -89,23 +86,22 @@ in *what CuttleSearch is allowed to add*:
   is under its own push-readiness work; CuttleSearch is a consumer, hands
   off. The ceiling in paired mode is "what CuttleDB can do."
 - **Embedded (standalone):** this is where CuttleSearch **implements
-  more** than the substrate exposes — analyzers, typo tolerance,
-  highlighting, faceting beyond the raw verbs — **in its own layer**
-  (OctoASM/OctoFlow over its bundled substrate), and where the bench
-  proves those additions. The standalone engine is the R&D surface; the
-  paired engine is the fast, governed surface.
+  more** than the engine exposes — analyzers, typo tolerance,
+  highlighting, faceting beyond the raw verbs — **in its own program
+  layer** over its bundled engine, and where the bench proves those
+  additions. The standalone engine is the R&D surface; the paired engine
+  is the fast, governed surface.
 
-> Resolves DEFINITION.md open question *"bundled substrate = public
-> CuttleDB vs. internal build."* **Embedded mode bundles an internal
-> substrate build** (the same closed CuttleDB engine core CuttleDB ships).
-> **Attached mode speaks to a public CuttleDB** over the wire. Both
-> exist; embedded is the default.
+> Resolves DEFINITION.md open question *"bundled engine (embedded) vs.
+> separate CuttleDB (attached)."* **Embedded mode bundles the CuttleDB
+> engine in-process.** **Attached mode speaks to a separate CuttleDB**
+> over the wire. Both exist; embedded is the default.
 
 ---
 
 ## 2. What it's built ON — substrate that exists today
 
-These ship in CuttleDB **now** (v0.7.0, verified in `FEATURES.md`).
+These ship in CuttleDB **now** (v0.8.0, verified in `FEATURES.md`).
 CuttleSearch composes them; it does not re-implement them.
 
 - **Storage / data model** — typed columns (int, float, string, vector,
@@ -129,43 +125,43 @@ CuttleSearch composes them; it does not re-implement them.
 ## 3. What standalone CuttleSearch must implement (the gap list)
 
 The honest part — and note **whose** code this is. Everything below is
-implemented in **CuttleSearch's standalone layer** (OctoASM/OctoFlow over
-its bundled substrate), **not** pushed into the public CuttleDB. Paired
-mode gets only what CuttleDB already exposes (§1); standalone is where
-these additions live and get benched. CuttleDB is not modified.
+implemented in **CuttleSearch's standalone program layer** over its
+bundled engine, **not** pushed into the public CuttleDB. Paired mode gets
+only what CuttleDB already exposes (§1); standalone is where these
+additions live and get benched. CuttleDB is not modified.
 
 "Search-engine surface" is mostly **above** the wire verbs, but a few
-items may eventually wall into the substrate (C) — and *that C is
-CuttleSearch's own embedded build, never the public CuttleDB*. Per
-`STACK_SOP.md`, each is tagged with where it should live.
+items may eventually wall into the engine — and *that engine work is
+CuttleSearch's own embedded build, never the public CuttleDB*. Each is
+tagged with where it should live.
 
-| Capability | Lives in | Substrate gap? | Notes |
+| Capability | Lives in | Engine gap? | Notes |
 |---|---|---|---|
-| Ingestion pipeline (docs → analyze → embed → index) | OctoFlow (orchestration) | **No** | Composes `INS_BATCH` + embedder + `INDEX`. |
-| Index & mapping management (declare fields, types, what's vectorized/filterable/faceted) | OctoFlow (config) | **No** | Maps onto handles/tables/columns. |
-| Query DSL → wire compiler (filters/sort/page/facets → `BSEARCH`/`SEARCH`/`KNN`) | OctoASM (parser/compiler) | **No** | Pure translation layer. |
-| **Analyzers** (stemming, stop-words, synonyms, language) | OctoASM | **Partly** | Today's BM25 tokenizer = "split non-alphanumeric, lowercase." Richer analysis can pre-expand tokens above the verb; deep language handling may want a substrate tokenizer hook. |
-| **Typo tolerance** (the Meilisearch/Typesense headline) | OctoASM + maybe C | **Likely yes** | Fuzzy matching over the inverted index. Either above-substrate query expansion (cheap, first cut) or fuzzy postings in `octodb_bm25.c` (fast, later). **Biggest competitive gap.** |
-| **Highlighting** (snippets with matched terms marked) | OctoASM + maybe C | **Likely yes** | Needs term **positions**. Check whether BM25 postings store positions; if not, that's a substrate add. |
-| Faceting / aggregations (counts per facet value over a filtered set) | OctoFlow | **Verify** | CuttleDB has GROUP BY + O(1) COUNT; facet-count UX likely composes, confirm in Sprint 4. |
-| Relevance tuning (field boosts, ranking rules, fusion knobs) | OctoASM | **No (mostly)** | Re-weight above RRF; only a per-field-weight knob would touch C. |
-| Pagination / sort by arbitrary field | OctoASM | **Verify** | Compose `SELECT` + sort; confirm large-offset cost. |
-| Multi-index / multi-tenant scoping | OctoFlow + `AUTH` | **No (mostly)** | index = table/handle; scoped access via per-handle AUTH. |
-| Agent-native progressive disclosure (token-budgeted responses) | OctoASM (API formatter) | **No** | Response-shaping; the old "compass" idea, demoted to one feature. |
-| Admin console | embedded HTML+JS / OctoUI | **No** | Thin operator surface. |
+| Ingestion pipeline (docs → analyze → embed → index) | program layer (orchestration) | **No** | Composes `INS_BATCH` + embedder + `INDEX`. |
+| Index & mapping management (declare fields, types, what's vectorized/filterable/faceted) | program layer (config) | **No** | Maps onto handles/tables/columns. |
+| Query DSL → wire compiler (filters/sort/page/facets → `BSEARCH`/`SEARCH`/`KNN`) | program layer (parser/compiler) | **No** | Pure translation layer. |
+| **Analyzers** (stemming, stop-words, synonyms, language) | program layer | **Partly** | Today's BM25 tokenizer = "split non-alphanumeric, lowercase." Richer analysis can pre-expand tokens above the verb; deep language handling may want an engine tokenizer hook. |
+| **Typo tolerance** (the Meilisearch/Typesense headline) | program layer + maybe engine | **Likely yes** | Fuzzy matching over the inverted index. Either above-engine query expansion (cheap, first cut) or fuzzy BM25 postings in the engine (fast, later). **Biggest competitive gap.** |
+| **Highlighting** (snippets with matched terms marked) | program layer + maybe engine | **Likely yes** | Needs term **positions**. Check whether BM25 postings store positions; if not, that's an engine add. |
+| Faceting / aggregations (counts per facet value over a filtered set) | program layer | **Verify** | CuttleDB has GROUP BY + O(1) COUNT; facet-count UX likely composes, confirm in Sprint 4. |
+| Relevance tuning (field boosts, ranking rules, fusion knobs) | program layer | **No (mostly)** | Re-weight above RRF; only a per-field-weight knob would touch the engine. |
+| Pagination / sort by arbitrary field | program layer | **Verify** | Compose `SELECT` + sort; confirm large-offset cost. |
+| Multi-index / multi-tenant scoping | program layer + `AUTH` | **No (mostly)** | index = table/handle; scoped access via per-handle AUTH. |
+| Agent-native progressive disclosure (token-budgeted responses) | program layer (API formatter) | **No** | Response-shaping; the old "compass" idea, demoted to one feature. |
+| Admin console | embedded HTML+JS | **No** | Thin operator surface. |
 
-**Three real substrate candidates**, in priority order: typo tolerance,
+**Three real engine candidates**, in priority order: typo tolerance,
 highlighting (positions), and richer analyzers. Everything else is
-above-the-line OctoASM/OctoFlow work. We resolve each the
-`STACK_SOP.md` way — try OctoASM first, drop to C only when the wall is
-concrete and measured — and any such C lands in **CuttleSearch's own
-embedded build**, keeping the published CuttleDB untouched.
+above-the-line program-layer work. We resolve each by trying the program
+layer first, dropping into the engine only when the wall is concrete and
+measured — and any such engine work lands in **CuttleSearch's own embedded
+build**, keeping the published CuttleDB untouched.
 
 ---
 
 ## 4. Sprints — each lands a measurable bench delta
 
-Bench-first throughout (the Engram lesson). Every sprint must move a
+Bench-first throughout. Every sprint must move a
 number on the proving harness — the internal dev bench at `internal/bench/`,
 **not part of the shipped product** — which sits between the `none` floor
 (0.00) and `oracle` ceiling (1.00). Paths like `bench/…`,
@@ -214,7 +210,7 @@ Meilisearch on this corpus" is one apples-to-apples table.
 ### Sprint 1 — index, mapping, ingestion (the spine) — SPLIT GATE
 Built as a dependency-free **reference engine** (`bench/engine/`) that
 defines correct retrieval; the shipping binary + paired CuttleDB track
-must reproduce it (same pattern as OctoCortex's NumpyBackend → OctoDB).
+must reproduce it.
 - [x] Mapping declaration: `Mapping` (key / text / vector / filter
   fields) in `engine/index.py`.
 - [x] Ingestion pipeline: documents in → analyze (`engine/analyze.py`)
@@ -363,6 +359,6 @@ on relevance at a fraction of the footprint; release artifacts signed.
   with our extensions namespaced.
 - **Typo tolerance depth** — above-substrate expansion vs. C fuzzy
   postings. Decided by Sprint 3 latency numbers.
-- **Embedder default** — CuttleMem NativeEmbedder vs. BYO-only.
+- **Embedder default** — a bundled native embedder vs. BYO-only.
 - **Index = table vs. handle** — the multi-tenant mapping granularity.
   Decided in Sprint 1 / revisited in Sprint 6.

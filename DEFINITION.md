@@ -1,9 +1,8 @@
 # CuttleSearch — what it is
 
 > Foundational identity doc. Everything else (spec, roadmap, bench,
-> marketing) must be checkable against this. Supersedes the framing in
-> `../SearchEngine/` (which positioned a consumer/agent product; this
-> reframes to developer search infrastructure).
+> marketing) must be checkable against this. It reframes the product as
+> developer search infrastructure rather than a consumer/agent product.
 
 ## One sentence
 
@@ -111,11 +110,10 @@ Perplexity / Tavily / Brave.
 
 ## Resolved (see ROADMAP.md)
 
-- **Own binary, not a mode-flag.** Ships as `cuttlesearch.exe` +
-  `.obin` (same `cuttledb-server` engine as CuttleDB, search logic in
-  OctoASM/OctoFlow), <1 MB, copy-and-run. Standalone identity gets its
-  own front door. Also builds to WASM for embedded/browser.
-- **Bundled substrate = internal build (embedded) / public CuttleDB
-  (attached).** Embedded mode bundles the same closed CuttleDB engine core
-  CuttleDB ships; attached mode speaks to a public CuttleDB over the
-  wire. Both exist; embedded is the default.
+- **Own binary, not a mode-flag.** Ships as the `cuttledb-server` engine
+  (same as CuttleDB) plus the assembled `cuttlesearch.obin` program, <1 MB,
+  copy-and-run. Standalone identity gets its own front door. Also builds to
+  WASM for embedded/browser.
+- **Bundled engine (embedded) / separate CuttleDB (attached).** Embedded
+  mode bundles the CuttleDB engine in-process; attached mode speaks to a
+  separate CuttleDB over the wire. Both exist; embedded is the default.

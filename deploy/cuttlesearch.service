@@ -8,7 +8,7 @@
 #   sudo systemctl daemon-reload && sudo systemctl enable --now cuttlesearch
 
 [Unit]
-Description=CuttleSearch read-only search API (OctoASM)
+Description=CuttleSearch read-only search API
 After=network-online.target
 Wants=network-online.target
 

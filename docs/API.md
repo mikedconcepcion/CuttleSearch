@@ -73,7 +73,7 @@ valid empty result: `"total":0,"hits":[]`.
 |--------|-------------------|------|
 | `400`  | `bad_request` | `q` missing (`{"message":"missing required parameter: q"}`) |
 | `400`  | `bad_request` | raw `"` or `\` in the query (`{"message":"invalid characters in query"}`) |
-| `400`  | `bad_request` | unknown `mode` value (supported: `bm25`, `vector`, `hybrid`) |
+| `400`  | `bad_request` | unrecognized `mode` value — only `bm25` is live; `vector` / `hybrid` are recognized but return `501` (see below), and any other value is a `400` |
 | `404`  | `not_found` | unknown route |
 | `413`  | `payload_too_large` | request line exceeds 8192 bytes |
 | `501`  | `not_implemented` | `mode=vector` or `mode=hybrid` (roadmap; use `bm25`) |
@@ -83,6 +83,34 @@ Error envelope shape:
 ```json
 {"error":{"code":"bad_request","message":"missing required parameter: q"}}
 ```
+
+---
+
+## Official clients
+
+The endpoint is plain HTTP + JSON — any client works. As a convenience, the
+[`cuttledb`](https://github.com/mikedconcepcion/CuttleDB) adapter package
+(npm + PyPI, v0.8.0+) ships a tiny zero-dependency client so you don't have to
+hand-roll the request and error handling:
+
+```js
+import { CuttleSearchClient } from "cuttledb/search";
+
+const cs = new CuttleSearchClient("http://HOST:8787");
+const res = await cs.search("fox river", { k: 5 });   // → { …, hits: [{ id, score }] }
+```
+
+```python
+from cuttledb.search import CuttleSearchClient
+
+cs = CuttleSearchClient("http://HOST:8787")
+res = cs.search("fox river", k=5)                      # → { …, "hits": [{ "id", "score" }] }
+```
+
+It's a separate import — not a method on the `CuttleDB` database client —
+because CuttleSearch is its own read-only HTTP service. Errors (`400` / `501`)
+surface as `CuttleSearchError` carrying `.status` and `.code`. You don't need
+CuttleDB itself to use it; it only needs this endpoint's base URL.
 
 ---
 

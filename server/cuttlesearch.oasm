@@ -1,6 +1,6 @@
 ; ============================================================================
-;  CuttleSearch — HTTP/JSON search service in pure OctoASM
-;  Runs on the cuttledb-server engine (zero deps). No OctoFlow, no new runtime C.
+;  CuttleSearch — HTTP/JSON search service, assembly source for the engine.
+;  Runs on the cuttledb-server engine (zero deps). No new runtime dependencies.
 ;
 ;  Routes:
 ;    GET  /health             -> 200 {"status":"ok",...}            (no auth)

@@ -88,8 +88,8 @@ answers worth calling — and both are CuttleSearch's, not the protocol's:
 
 Token savings come from **retrieval**, not HTML compression: a handful of
 ranked, typed rows answer the query instead of the agent ingesting the
-whole site's page set. (We do not borrow OctoWeb's HTML compressor —
-Active GEO is self-contained in CuttleSearch.)
+whole site's page set. (There is no HTML-compression step — Active GEO is
+self-contained in CuttleSearch.)
 
 ## Backend-pluggable — SQL is the adoption face, CuttleDB the peer
 

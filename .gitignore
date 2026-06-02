@@ -40,8 +40,13 @@ results/
 bin/cuttledb-server
 bin/cuttledb-server.exe
 
+# The build toolchain (the assembler) is not committed either — it is not needed
+# to run the product, only to rebuild the assembled program from source.
+bin/octoasm
+bin/octoasm.exe
+
 # Note: server/cuttlesearch.obin (the assembled program) IS tracked — it is the
-# open product, reproducible from server/cuttlesearch.oasm with bin/octoasm.
+# open product, reproducible from server/cuttlesearch.oasm with the build toolchain.
 
 # Local secrets — never commit
 *.env
