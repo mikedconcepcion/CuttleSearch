@@ -39,13 +39,17 @@ export class CuttleSearch {
     const m = this._m;
     const outPtr = m._malloc(OUT_CAP);
     try {
-      m.ccall(
+      // The entry point returns the number of bytes written and does NOT
+      // null-terminate, so bound the read by `n` — otherwise a reused buffer
+      // leaks the tail of a longer prior response into this one.
+      const n = m.ccall(
         "cuttledb_exec_line",
         "number",
         ["string", "number", "number"],
         [line, outPtr, OUT_CAP]
       );
-      return m.UTF8ToString(outPtr).replace(/\r?\n$/, "");
+      if (n <= 0) return "";
+      return m.UTF8ToString(outPtr, n).replace(/\r?\n$/, "");
     } finally {
       m._free(outPtr);
     }
