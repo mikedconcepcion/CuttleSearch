@@ -1,0 +1,758 @@
+; ============================================================================
+;  CuttleSearch — HTTP/JSON search service in pure OctoASM
+;  Runs on the cuttledb-server engine (zero deps). No OctoFlow, no new runtime C.
+;
+;  Routes:
+;    GET  /health             -> 200 {"status":"ok",...}            (no auth)
+;    GET  /search?q=<query>   -> 200 {"query","k","mode",...,"hits"}
+;    POST /search?q=<query>   -> 200 (query-string only in v1)
+;    OPTIONS *                -> 204 (CORS preflight)
+;    <bad method> *           -> 405 {"error":{"code":"method_not_allowed",...}}
+;    GET/POST <bad path>      -> 404 {"error":{"code":"not_found",...}}
+;
+;  Contract matches reference/cuttlesearch (the Python test oracle).
+;  Response framing: Connection: close + read-until-EOF (no Content-Length),
+;  so variable-length JSON bodies need no byte counting. tcp_write appends
+;  CRLF per line, which terminates HTTP header lines and the body.
+;
+;  v1 scope: request parsing, routing, error envelopes, and query extraction
+;  are real and curl-verified. The retrieval backend (CuttleDB hits) is the
+;  one remaining wiring step — see ROADMAP "Search backend".
+; ============================================================================
+
+fn main(64):
+    ; ---- bind + listen on :8787 (matches reference default) ----
+    loadint r1, 8787
+    tcp_listen r2, r1
+    loadint r21, 0
+    lt r5, r2, r21              ; server_fd < 0 ?
+    jumpif r5, listen_fail
+
+    ; ---- constants reused across the accept loop ----
+    loadk   r20, 4611686018427387903   ; tcp_read EOF sentinel = (1<<62)-1
+    loadint r22, 32            ; ' '
+    loadint r23, 63            ; '?'
+    loadint r24, 16            ; substr pack shift
+
+    loadk   r30, "cuttlesearch: listening on http://0.0.0.0:8787"
+    write_stdout r31, r30
+
+    ; ---- boot-time read-only index load (operator-config path, never request-derived) ----
+    ; db_load hardcodes the LOAD verb in C; the path is a compile-time constant.
+    ; r60 holds the index handle for the life of the process (-1 = no index).
+    loadk   r61, "index.snap"
+    db_load r60, r61
+    lt      r62, r60, r21          ; hid < 0 ? (load failed / missing snapshot)
+    jumpifn r62, accept_loop
+    loadk   r30, "cuttlesearch: WARN no index.snap loaded -> searches return empty"
+    write_stdout r31, r30
+
+accept_loop:
+    tcp_accept r3, r2
+    lt r5, r3, r21             ; client_fd < 0 ? -> retry
+    jumpif r5, accept_loop
+
+    ; ---- read the request line (METHOD SP PATH SP VERSION) ----
+    tcp_read r4, r3
+    eq r5, r4, r20             ; immediate EOF ?
+    jumpif r5, close_client
+
+    ; ---- drain remaining header lines until blank line / EOF (cap 100) ----
+    loadint r9, 0
+drain:
+    tcp_read r6, r3
+    eq r7, r6, r20
+    jumpif r7, drained
+    len r8, r6
+    eq r7, r8, r21            ; blank line -> end of headers
+    jumpif r7, drained
+    loadint r7, 1
+    add r9, r9, r7
+    loadint r7, 100
+    le r8, r9, r7
+    jumpif r8, drain
+drained:
+
+    ; ---- request-line length cap (8192) ----
+    len r6, r4
+    loadint r7, 8192
+    le r8, r6, r7
+    jumpifn r8, route_413
+
+    ; ---- CORS preflight: OPTIONS <path> -> 204 ----
+    loadint r10, 8
+    substr r11, r4, r10        ; first 8 chars
+    loadk r12, "OPTIONS "
+    strcmp r13, r11, r12
+    jumpifn r13, route_cors    ; match (0) -> preflight
+
+    ; ---- method allowlist: only GET / POST reach routing (OPTIONS handled) ----
+    ; Anything else (PUT/DELETE/PATCH/HEAD/...) -> 405 with an Allow header.
+    ; A supported method on an unknown path still falls through to 404 below.
+    loadint r10, 4
+    substr r11, r4, r10        ; first 4 chars
+    loadk r12, "GET "
+    strcmp r13, r11, r12
+    jumpifn r13, method_ok     ; matched "GET " -> proceed
+    loadint r10, 5
+    substr r11, r4, r10        ; first 5 chars
+    loadk r12, "POST "
+    strcmp r13, r11, r12
+    jumpif r13, route_405      ; neither GET nor POST -> 405
+method_ok:
+
+    ; ---- route: GET /health ----
+    loadint r10, 11
+    substr r11, r4, r10       ; first 11 chars
+    loadk r12, "GET /health"
+    strcmp r13, r11, r12
+    jumpif r13, chk_llms      ; != 0 -> not /health
+    loadint r10, 11
+    strbyte r14, r4, r10      ; boundary char must be space
+    eq r15, r14, r22
+    jumpif r15, route_health
+
+chk_llms:
+    ; ---- route: GET /llms.txt  (Active GEO discovery billboard) ----
+    loadint r10, 13
+    substr r11, r4, r10       ; first 13 chars
+    loadk r12, "GET /llms.txt"
+    strcmp r13, r11, r12
+    jumpif r13, chk_mcp       ; != 0 -> not /llms.txt
+    loadint r10, 13
+    strbyte r14, r4, r10      ; boundary char must be space
+    eq r15, r14, r22
+    jumpif r15, route_llms
+
+chk_mcp:
+    ; ---- route: GET /mcp.json  (Active GEO: MCP tool discovery manifest) ----
+    loadint r10, 13
+    substr r11, r4, r10       ; first 13 chars
+    loadk r12, "GET /mcp.json"
+    strcmp r13, r11, r12
+    jumpif r13, chk_search_get   ; != 0 -> not /mcp.json
+    loadint r10, 13
+    strbyte r14, r4, r10      ; boundary char must be space
+    eq r15, r14, r22
+    jumpif r15, route_mcp
+
+chk_search_get:
+    loadint r10, 11
+    substr r11, r4, r10       ; first 11 chars
+    loadk r12, "GET /search"
+    strcmp r13, r11, r12
+    jumpif r13, chk_search_post
+    loadint r10, 11
+    strbyte r14, r4, r10
+    eq r15, r14, r22         ; space -> no query (handled in route)
+    jumpif r15, route_search_get
+    eq r15, r14, r23         ; '?'  -> query present
+    jumpif r15, route_search_get
+    jump route_404
+
+chk_search_post:
+    loadint r10, 12
+    substr r11, r4, r10       ; first 12 chars
+    loadk r12, "POST /search"
+    strcmp r13, r11, r12
+    jumpif r13, route_404
+    loadint r10, 12
+    strbyte r14, r4, r10
+    eq r15, r14, r22
+    jumpif r15, route_search_post
+    eq r15, r14, r23
+    jumpif r15, route_search_post
+    jump route_404
+
+; ---------------------------------------------------------------------------
+;  Query parsing: an order-independent &key=value loop over the query string
+;  (?<k=N|mode=M|q=query in ANY order>). The route prefix is fixed length, so
+;  the cursor starts at the first param-key char right after '?'. Each param is
+;  dispatched on its key's first char; q is just another param, not positional.
+;    q    -> the search text (required). Scan to first space / '&' / NUL.
+;            Reject '"' and '\' (would break the reflected JSON) with 400.
+;    k    -> max hits, clamp [1,100], default 10. Effective k reflected in JSON
+;            (raw digit substring in-range; fixed literals for clamp/default —
+;            there is no int->string opcode).
+;    mode -> bm25 (live), vector|hybrid (honest 501 stub), else 400.
+;  State: kv r19, kstr r39, mode r34 (0 bm25, 1 vector, 2 hybrid, 3 unknown),
+;         q-found r48, q-raw r50, q-start r40.
+;  Scratch: r25 char, r26 const, r27 bool, r28 tmp, r32 k-start, r33 k-pack,
+;           r35 mode-start, r36 mode-len, r37 mode-pack, r38 mode-token,
+;           r42-r47/r49 q-scan temps.
+; ---------------------------------------------------------------------------
+route_search_get:
+    loadint r10, 11
+    strbyte r14, r4, r10
+    eq r15, r14, r23          ; '?' present ?
+    jumpifn r15, route_400_q  ; space -> no query string -> missing q
+    loadint r41, 12           ; cursor -> first param-key char
+    jump scan_params_init
+
+route_search_post:
+    loadint r10, 12
+    strbyte r14, r4, r10
+    eq r15, r14, r23          ; '?' present ?
+    jumpifn r15, route_400_q  ; no query string -> missing q (body parse deferred)
+    loadint r41, 13           ; cursor -> first param-key char
+    jump scan_params_init
+
+scan_params_init:
+    loadint r19, 10           ; kv default
+    loadk   r39, "10"         ; kstr default
+    loadint r34, 0            ; mode = bm25
+    loadint r48, 0            ; q-found = false
+param_key:
+    strbyte r25, r4, r41      ; first char of this key
+    loadint r26, 113          ; 'q'
+    eq r27, r25, r26
+    jumpif r27, pk_q
+    loadint r26, 107          ; 'k'
+    eq r27, r25, r26
+    jumpif r27, pk_k
+    loadint r26, 109          ; 'm'
+    eq r27, r25, r26
+    jumpif r27, pk_m
+    jump pk_skip              ; unknown key -> skip its value
+
+param_next:
+    ; cursor sits on a terminator: '&' -> advance + parse next; else finish.
+    strbyte r25, r4, r41
+    loadint r26, 38           ; '&'
+    eq r27, r25, r26
+    jumpifn r27, scan_finish
+    loadint r26, 1
+    add r41, r41, r26         ; -> first key char of next param
+    jump param_key
+
+pk_q:
+    loadint r26, 1
+    add r41, r41, r26         ; past 'q'
+    strbyte r25, r4, r41
+    loadint r26, 61           ; '='
+    eq r27, r25, r26
+    jumpifn r27, pk_skip      ; 'q' not a lone key (e.g. "query=") -> skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> first value char
+    move r40, r41             ; q value start
+scan_q:
+    strbyte r42, r4, r41
+    eq r43, r42, r21          ; NUL / end of line
+    jumpif r43, scan_q_done
+    eq r43, r42, r22          ; space
+    jumpif r43, scan_q_done
+    loadint r44, 38           ; '&'
+    eq r43, r42, r44
+    jumpif r43, scan_q_done
+    loadint r44, 34           ; '"'
+    eq r43, r42, r44
+    jumpif r43, route_400_badq
+    loadint r44, 92           ; backslash
+    eq r43, r42, r44
+    jumpif r43, route_400_badq
+    loadint r44, 1
+    add r41, r41, r44
+    loadint r45, 1024         ; cap value length
+    add r45, r40, r45
+    le r46, r41, r45
+    jumpif r46, scan_q
+scan_q_done:
+    sub r47, r41, r40         ; length
+    eq r28, r47, r21          ; empty ?
+    jumpif r28, route_400_q
+    shl r49, r40, r24         ; start << 16
+    or  r49, r49, r47         ; | length
+    substr r50, r4, r49       ; raw query string (still percent-encoded)
+    loadint r48, 1            ; q found
+    jump param_next
+
+pk_k:
+    loadint r26, 1
+    add r41, r41, r26         ; -> char after 'k'
+    strbyte r25, r4, r41
+    loadint r26, 61           ; '='
+    eq r27, r25, r26
+    jumpifn r27, pk_skip      ; 'k' not a lone key -> skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> first digit
+    move r32, r41
+    loadint r19, 0
+scan_k:
+    strbyte r25, r4, r41
+    loadint r26, 48           ; '0'
+    lt r27, r25, r26
+    jumpif r27, scan_k_done
+    loadint r26, 57           ; '9'
+    lt r27, r26, r25
+    jumpif r27, scan_k_done
+    loadint r26, 10
+    mul r19, r19, r26
+    loadint r26, 48
+    sub r28, r25, r26
+    add r19, r19, r28
+    loadint r26, 1
+    add r41, r41, r26
+    sub r28, r41, r32
+    loadint r26, 4
+    lt r27, r28, r26
+    jumpif r27, scan_k
+scan_k_done:
+    sub r28, r41, r32         ; ndigits
+    eq r27, r28, r21
+    jumpif r27, k_default
+    loadint r26, 1
+    lt r27, r19, r26          ; kv < 1 ?
+    jumpif r27, k_default
+    loadint r26, 100
+    lt r27, r26, r19          ; kv > 100 ?
+    jumpif r27, k_clamp_hi
+    shl r33, r32, r24
+    or  r33, r33, r28
+    substr r39, r4, r33       ; kstr = raw digits
+    jump param_next
+k_clamp_hi:
+    loadint r19, 100
+    loadk   r39, "100"
+    jump param_next
+k_default:
+    loadint r19, 10
+    loadk   r39, "10"
+    jump param_next
+
+pk_m:
+    loadint r26, 1
+    add r41, r41, r26         ; past 'm' -> expect 'o'
+    strbyte r25, r4, r41
+    loadint r26, 111          ; 'o'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'd'
+    strbyte r25, r4, r41
+    loadint r26, 100          ; 'd'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'e'
+    strbyte r25, r4, r41
+    loadint r26, 101          ; 'e'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> '='
+    strbyte r25, r4, r41
+    loadint r26, 61           ; '='
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> first value char
+    move r35, r41
+scan_mode:
+    strbyte r25, r4, r41
+    eq r27, r25, r21          ; NUL
+    jumpif r27, scan_mode_done
+    loadint r26, 32           ; space
+    eq r27, r25, r26
+    jumpif r27, scan_mode_done
+    loadint r26, 38           ; '&'
+    eq r27, r25, r26
+    jumpif r27, scan_mode_done
+    loadint r26, 1
+    add r41, r41, r26
+    sub r28, r41, r35
+    loadint r26, 16           ; cap mode token
+    lt r27, r28, r26
+    jumpif r27, scan_mode
+scan_mode_done:
+    sub r36, r41, r35         ; mode len
+    shl r37, r35, r24
+    or  r37, r37, r36
+    substr r38, r4, r37       ; mode token
+    loadk r25, "bm25"
+    strcmp r27, r38, r25
+    jumpifn r27, m_bm25
+    loadk r25, "vector"
+    strcmp r27, r38, r25
+    jumpifn r27, m_vector
+    loadk r25, "hybrid"
+    strcmp r27, r38, r25
+    jumpifn r27, m_hybrid
+    loadint r34, 3            ; unknown mode
+    jump param_next
+m_bm25:
+    loadint r34, 0
+    jump param_next
+m_vector:
+    loadint r34, 1
+    jump param_next
+m_hybrid:
+    loadint r34, 2
+    jump param_next
+
+pk_skip:
+    ; skip an unrecognized param: scan from cursor to next '&'/space/NUL,
+    ; then let param_next decide whether more params follow.
+    strbyte r25, r4, r41
+    eq r27, r25, r21
+    jumpif r27, param_next
+    loadint r26, 32
+    eq r27, r25, r26
+    jumpif r27, param_next
+    loadint r26, 38
+    eq r27, r25, r26
+    jumpif r27, param_next
+    loadint r26, 1
+    add r41, r41, r26
+    jump pk_skip
+
+scan_finish:
+    loadint r26, 0
+    eq r27, r48, r26          ; q found ?
+    jumpif r27, route_400_q   ; no q in any param -> missing q
+    url_decode r50, r50       ; '+'/%XX -> bytes; strips CR/LF/quote/backslash
+    eq r27, r34, r26
+    jumpif r27, route_search_ok    ; bm25 (live)
+    loadint r26, 1
+    eq r27, r34, r26
+    jumpif r27, route_501_vector
+    loadint r26, 2
+    eq r27, r34, r26
+    jumpif r27, route_501_hybrid
+    jump route_400_mode            ; unknown mode
+
+; ---------------------------------------------------------------------------
+;  Responses
+; ---------------------------------------------------------------------------
+route_health:
+    loadk r30, "HTTP/1.1 200 OK"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Server: CuttleSearch/0.8.0"
+    tcp_write r3, r30
+    loadk r30, "X-Content-Type-Options: nosniff"
+    tcp_write r3, r30
+    loadk r30, "Cache-Control: no-store"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"status\":\"ok\",\"service\":\"cuttlesearch\",\"version\":\"0.8.0\"}"
+    tcp_write r3, r30
+    jump close_client
+
+route_llms:
+    ; ---- Active GEO discovery billboard: llms.txt (spec-legal markdown) ----
+    ; text/plain so agents fetch it cheaply; links /search + /health as live data.
+    loadk r30, "HTTP/1.1 200 OK"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: text/plain; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Server: CuttleSearch/0.8.0"
+    tcp_write r3, r30
+    loadk r30, "X-Content-Type-Options: nosniff"
+    tcp_write r3, r30
+    loadk r30, "Cache-Control: public, max-age=300"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "# CuttleSearch"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "> Open-source search infrastructure: full-text BM25 ranking over a small, hardened, read-only HTTP/JSON API. Zero external dependencies."
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "CuttleSearch indexes documents offline and serves ranked search over them. Humans and LLM agents are first-class clients of the same open API. The HTTP surface is read-only, so it is safe to expose publicly."
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "## Live data"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "- [Search API](/search?q=): Ranked full-text search over the live index. GET or POST; q is the query string; k is optional (max results, default 10). Returns JSON with total and a hits array of id and score."
+    tcp_write r3, r30
+    loadk r30, "- [Health](/health): Liveness probe. Returns JSON status ok plus service name and version."
+    tcp_write r3, r30
+    loadk r30, "- [MCP manifest](/mcp.json): Machine-readable tool descriptor for MCP-aware agents. Describes the search tool and its input schema."
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "## Notes"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "- All endpoints are read-only; no endpoint mutates the underlying index."
+    tcp_write r3, r30
+    loadk r30, "- Responses are JSON (application/json) except this discovery file."
+    tcp_write r3, r30
+    loadk r30, "- Served by CuttleSearch (https://github.com/mikedconcepcion/CuttleSearch)."
+    tcp_write r3, r30
+    jump close_client
+
+route_mcp:
+    ; ---- Active GEO: MCP tool discovery manifest (GET /mcp.json) ----
+    ; Static, machine-readable tool descriptor. Read-only; describes the
+    ; search tool + its input schema so MCP-aware agents can self-configure.
+    ; JSON body split across tcp_write lines only on whitespace boundaries
+    ; (CRLF inserted between lines is JSON-legal inter-token whitespace).
+    loadk r30, "HTTP/1.1 200 OK"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Server: CuttleSearch/0.8.0"
+    tcp_write r3, r30
+    loadk r30, "X-Content-Type-Options: nosniff"
+    tcp_write r3, r30
+    loadk r30, "Cache-Control: public, max-age=300"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"name\":\"cuttlesearch\",\"version\":\"0.8.0\","
+    tcp_write r3, r30
+    loadk r30, "\"description\":\"Read-only full-text BM25 search over a pre-built index.\","
+    tcp_write r3, r30
+    loadk r30, "\"tools\":[{\"name\":\"search\","
+    tcp_write r3, r30
+    loadk r30, "\"description\":\"Run a ranked full-text search and return matching document ids with scores.\","
+    tcp_write r3, r30
+    loadk r30, "\"endpoint\":\"/search\",\"method\":\"GET\","
+    tcp_write r3, r30
+    loadk r30, "\"inputSchema\":{\"type\":\"object\","
+    tcp_write r3, r30
+    loadk r30, "\"properties\":{\"q\":{\"type\":\"string\",\"description\":\"The search query.\"},"
+    tcp_write r3, r30
+    loadk r30, "\"k\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"default\":10,\"description\":\"Max results.\"},"
+    tcp_write r3, r30
+    loadk r30, "\"mode\":{\"type\":\"string\",\"enum\":[\"bm25\"],\"default\":\"bm25\",\"description\":\"Retrieval mode; only bm25 is live in this binary.\"}},"
+    tcp_write r3, r30
+    loadk r30, "\"required\":[\"q\"]}}],"
+    tcp_write r3, r30
+    loadk r30, "\"transport\":{\"http\":{\"baseUrl\":\"/\"},"
+    tcp_write r3, r30
+    loadk r30, "\"jsonrpc\":\"A conformant MCP JSON-RPC endpoint at /mcp is on the roadmap; today the search tool is callable directly over HTTP at /search.\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_search_ok:
+    loadk r30, "HTTP/1.1 200 OK"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Server: CuttleSearch/0.8.0"
+    tcp_write r3, r30
+    loadk r30, "X-Content-Type-Options: nosniff"
+    tcp_write r3, r30
+    loadk r30, "Cache-Control: no-store"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    ; ---- real retrieval via read-only db_search (BM25) ----
+    ; If no index loaded at boot (r60 < 0), fall back to empty hits so the
+    ; service still answers structurally-valid JSON.
+    lt r52, r60, r21              ; hid < 0 ?
+    jumpif r52, search_noindex
+
+    loadint r53, 48
+    shl r54, r60, r53             ; hid << 48
+    or r54, r54, r19              ; | k  (tid=0, col=0)  packed config
+    db_search r51, r54, r50       ; r51 = "total":N,"hits":[...]
+
+    loadk r55, "{\"query\":\""
+    concat r56, r55, r50
+    loadk r57, "\",\"k\":"
+    concat r58, r56, r57
+    concat r58, r58, r39          ; effective k (string)
+    loadk r57, ",\"mode\":\"bm25\",\"took_ms\":0,"
+    concat r58, r58, r57
+    concat r58, r58, r51          ; append "total":N,"hits":[...]
+    loadk r59, "}"
+    concat r58, r58, r59
+    tcp_write r3, r58
+    jump close_client
+
+search_noindex:
+    loadk r55, "{\"query\":\""
+    concat r56, r55, r50
+    loadk r57, "\",\"k\":"
+    concat r58, r56, r57
+    concat r58, r58, r39          ; effective k (string)
+    loadk r57, ",\"mode\":\"bm25\",\"took_ms\":0,\"total\":0,\"hits\":[]}"
+    concat r58, r58, r57
+    tcp_write r3, r58
+    jump close_client
+
+route_404:
+    loadk r30, "HTTP/1.1 404 Not Found"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"not_found\",\"message\":\"No such route.\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_400_q:
+    loadk r30, "HTTP/1.1 400 Bad Request"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"bad_request\",\"message\":\"missing required parameter: q\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_400_badq:
+    loadk r30, "HTTP/1.1 400 Bad Request"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"bad_request\",\"message\":\"invalid characters in query\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_501_vector:
+    ; honest stub: vector ranking is proven in the reference engine + bench,
+    ; not yet wired into the binary (needs the native embedder + KNN opcode).
+    loadk r30, "HTTP/1.1 501 Not Implemented"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Server: CuttleSearch/0.8.0"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"not_implemented\",\"message\":\"mode=vector is not yet available in this binary; it is proven in the reference engine and lands on the roadmap. Use mode=bm25.\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_501_hybrid:
+    loadk r30, "HTTP/1.1 501 Not Implemented"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Server: CuttleSearch/0.8.0"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"not_implemented\",\"message\":\"mode=hybrid is not yet available in this binary; it is proven in the reference engine and lands on the roadmap. Use mode=bm25.\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_400_mode:
+    loadk r30, "HTTP/1.1 400 Bad Request"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"bad_request\",\"message\":\"unknown mode; supported: bm25 (live), vector and hybrid (roadmap)\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_413:
+    loadk r30, "HTTP/1.1 413 Payload Too Large"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"payload_too_large\",\"message\":\"request line too large\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_405:
+    loadk r30, "HTTP/1.1 405 Method Not Allowed"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Allow: GET, POST, OPTIONS"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    loadk r30, "{\"error\":{\"code\":\"method_not_allowed\",\"message\":\"method not allowed\"}}"
+    tcp_write r3, r30
+    jump close_client
+
+route_cors:
+    loadk r30, "HTTP/1.1 204 No Content"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Methods: GET, POST, OPTIONS"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Headers: Content-Type, Authorization"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Max-Age: 86400"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    jump close_client
+
+close_client:
+    tcp_close r3
+    jump accept_loop
+
+listen_fail:
+    loadk r30, "cuttlesearch: tcp_listen failed (port 8787 in use?)"
+    write_stdout r31, r30
+    loadint r5, 1
+    halt r5
+end
+
+.entry main

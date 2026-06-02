@@ -1,0 +1,52 @@
+# CuttleSearch .gitignore
+
+# internal/ — dev scratchpad. NEVER committed. Not part of the product.
+# Holds the Python reference implementation, the bench/proving harness,
+# example consumers (stores/), tests, and scratch notes. The shippable
+# product is the cuttledb-server engine + server/cuttlesearch.obin plus the docs
+# and deploy artifacts around it — nothing in here.
+internal/
+
+# Python build artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+
+# Editor + OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Local index / snapshot / db state — never commit data
+*.snap
+*.cuttledb
+*.sqlite
+*.db
+.wal/
+results/
+
+# Runtime logs — never commit
+*.log
+
+# The engine binary is NOT committed — it ships as a release asset (same model
+# as CuttleDB) and is dropped into bin/ locally; see bin/README.md.
+bin/cuttledb-server
+bin/cuttledb-server.exe
+
+# Note: server/cuttlesearch.obin (the assembled program) IS tracked — it is the
+# open product, reproducible from server/cuttlesearch.oasm with bin/octoasm.
+
+# Local secrets — never commit
+*.env
+.env
+.env.local
+*.key
+*.pem
+api_keys.txt

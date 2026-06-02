@@ -1,0 +1,15 @@
+# Build context = repo root (docker build -f deploy/Dockerfile .).
+# Keep it tiny — only bin/cuttledb-server, server/cuttlesearch.obin, server/index.snap
+# are COPYed into the image.
+internal/
+docs/
+scripts/
+deploy/
+**/__pycache__/
+*.pyc
+*.log
+.git/
+.gitignore
+*.md
+bin/cuttledb-server.exe
+bin/README.md

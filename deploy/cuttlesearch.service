@@ -1,0 +1,42 @@
+# CuttleSearch systemd unit — bare-VPS deployment.
+#
+#   sudo install -d /opt/cuttlesearch
+#   sudo install -m755 bin/cuttledb-server /opt/cuttlesearch/cuttledb-server
+#   sudo install -m644 server/cuttlesearch.obin server/index.snap /opt/cuttlesearch/
+#   sudo useradd --system --no-create-home cuttle
+#   sudo cp deploy/cuttlesearch.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cuttlesearch
+
+[Unit]
+Description=CuttleSearch read-only search API (OctoASM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cuttle
+Group=cuttle
+WorkingDirectory=/opt/cuttlesearch
+ExecStart=/opt/cuttlesearch/cuttledb-server cuttlesearch.obin
+Restart=on-failure
+RestartSec=2
+
+# --- sandboxing: defense in depth on top of the read-only-by-construction app ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# The service writes nothing; grant no write paths. (If you later add a writable
+# log/scratch dir, list it here with ReadWritePaths=.)
+ReadOnlyPaths=/opt/cuttlesearch
+
+[Install]
+WantedBy=multi-user.target
