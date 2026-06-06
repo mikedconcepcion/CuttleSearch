@@ -20,7 +20,7 @@
 ;  one remaining wiring step — see ROADMAP "Search backend".
 ; ============================================================================
 
-fn main(64):
+fn main(80):
     ; ---- bind + listen on :8787 (matches reference default) ----
     loadint r1, 8787
     tcp_listen r2, r1
@@ -38,14 +38,27 @@ fn main(64):
     write_stdout r31, r30
 
     ; ---- boot-time read-only index load (operator-config path, never request-derived) ----
-    ; db_load hardcodes the LOAD verb in C; the path is a compile-time constant.
-    ; r60 holds the index handle for the life of the process (-1 = no index).
+    ; db_load hardcodes the LOAD verb in C; every path is a compile-time constant.
+    ; Each named index = one snapshot file -> one persistent handle. Routing by the
+    ; request's `index` param picks among them; an absent/unknown name -> default.
+    ;   r60 = default index "default"  (index.snap)   -- also the fallback
+    ;   r63 = index "b"                (index_b.snap)  -- optional; missing -> empty
+    ; To add a 3rd index: load its snapshot into a fresh persistent handle here and
+    ; add one match block in the resolver (sf_idx_*) + one name in param scanning.
     loadk   r61, "index.snap"
     db_load r60, r61
     lt      r62, r60, r21          ; hid < 0 ? (load failed / missing snapshot)
-    jumpifn r62, accept_loop
-    loadk   r30, "cuttlesearch: WARN no index.snap loaded -> searches return empty"
+    jumpifn r62, load_b            ; loaded ok -> next index
+    loadk   r30, "cuttlesearch: WARN no index.snap loaded -> default searches return empty"
     write_stdout r31, r30
+load_b:
+    loadk   r61, "index_b.snap"
+    db_load r63, r61
+    lt      r62, r63, r21          ; hid < 0 ? (optional snapshot absent)
+    jumpifn r62, accept_loop       ; loaded ok -> serve
+    loadk   r30, "cuttlesearch: note index_b.snap not present -> index=b returns empty"
+    write_stdout r31, r30
+    ; fall through to accept_loop
 
 accept_loop:
     tcp_accept r3, r2
@@ -169,7 +182,9 @@ chk_search_post:
 ;  (?<k=N|mode=M|q=query in ANY order>). The route prefix is fixed length, so
 ;  the cursor starts at the first param-key char right after '?'. Each param is
 ;  dispatched on its key's first char; q is just another param, not positional.
-;    q    -> the search text (required). Scan to first space / '&' / NUL.
+;    q    -> the search text (required UNLESS filter given). Scan to first
+;            space / '&' / NUL. An empty value (q=) is treated as ABSENT, so
+;            filter-only requests stay valid; scan_finish enforces q-OR-filter.
 ;            Reject '"' and '\' (would break the reflected JSON) with 400.
 ;    k    -> max hits, clamp [1,100], default 10. Effective k reflected in JSON
 ;            (raw digit substring in-range; fixed literals for clamp/default —
@@ -202,6 +217,10 @@ scan_params_init:
     loadk   r39, "10"         ; kstr default
     loadint r34, 0            ; mode = bm25
     loadint r48, 0            ; q-found = false
+    loadk   r50, ""           ; q-raw default (filter-only leaves q empty)
+    loadint r16, 0            ; filter-found = false
+    loadk   r17, ""           ; filter-raw (still percent-encoded) default
+    loadk   r66, ""           ; index name (empty -> default index)
 param_key:
     strbyte r25, r4, r41      ; first char of this key
     loadint r26, 113          ; 'q'
@@ -213,6 +232,12 @@ param_key:
     loadint r26, 109          ; 'm'
     eq r27, r25, r26
     jumpif r27, pk_m
+    loadint r26, 102          ; 'f'
+    eq r27, r25, r26
+    jumpif r27, pk_f
+    loadint r26, 105          ; 'i'
+    eq r27, r25, r26
+    jumpif r27, pk_i
     jump pk_skip              ; unknown key -> skip its value
 
 param_next:
@@ -258,8 +283,8 @@ scan_q:
     jumpif r46, scan_q
 scan_q_done:
     sub r47, r41, r40         ; length
-    eq r28, r47, r21          ; empty ?
-    jumpif r28, route_400_q
+    eq r28, r47, r21          ; empty value (q=) ? treat as ABSENT, not an error:
+    jumpif r28, param_next    ; let scan_finish enforce q-OR-filter (filter-only stays valid)
     shl r49, r40, r24         ; start << 16
     or  r49, r49, r47         ; | length
     substr r50, r4, r49       ; raw query string (still percent-encoded)
@@ -309,15 +334,15 @@ scan_k_done:
     shl r33, r32, r24
     or  r33, r33, r28
     substr r39, r4, r33       ; kstr = raw digits
-    jump param_next
+    jump pk_skip              ; resync cursor past any trailing junk (e.g. k=5x) to next terminator
 k_clamp_hi:
     loadint r19, 100
     loadk   r39, "100"
-    jump param_next
+    jump pk_skip
 k_default:
     loadint r19, 10
     loadk   r39, "10"
-    jump param_next
+    jump pk_skip
 
 pk_m:
     loadint r26, 1
@@ -389,6 +414,140 @@ m_hybrid:
     loadint r34, 2
     jump param_next
 
+pk_f:
+    ; filter=<DSL expr> — read-only Boolean/filter query. The raw value stays
+    ; percent-encoded here (it legitimately contains '=','"','<','>','~','(' ...);
+    ; db_bsearch decodes + DSL-sanitizes it in C. We only verify the key spelling
+    ; and bound the length. Value scan stops at '&'/space/NUL (spaces must be
+    ; percent/'+'-encoded, exactly like q). r18 = value start (transient scratch).
+    loadint r26, 1
+    add r41, r41, r26         ; past 'f' -> 'i'
+    strbyte r25, r4, r41
+    loadint r26, 105          ; 'i'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'l'
+    strbyte r25, r4, r41
+    loadint r26, 108          ; 'l'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 't'
+    strbyte r25, r4, r41
+    loadint r26, 116          ; 't'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'e'
+    strbyte r25, r4, r41
+    loadint r26, 101          ; 'e'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'r'
+    strbyte r25, r4, r41
+    loadint r26, 114          ; 'r'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> '='
+    strbyte r25, r4, r41
+    loadint r26, 61           ; '='
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> first value char
+    move r18, r41             ; filter value start
+scan_filter:
+    strbyte r42, r4, r41
+    eq r43, r42, r21          ; NUL / end of line
+    jumpif r43, scan_filter_done
+    eq r43, r42, r22          ; space
+    jumpif r43, scan_filter_done
+    loadint r44, 38           ; '&'
+    eq r43, r42, r44
+    jumpif r43, scan_filter_done
+    loadint r44, 1
+    add r41, r41, r44
+    loadint r45, 1024         ; cap filter length
+    add r45, r18, r45
+    le r46, r41, r45
+    jumpif r46, scan_filter
+scan_filter_done:
+    sub r47, r41, r18         ; length
+    eq r28, r47, r21          ; empty value -> ignore (no filter)
+    jumpif r28, param_next
+    shl r49, r18, r24         ; start << 16
+    or  r49, r49, r47         ; | length
+    substr r17, r4, r49       ; raw filter (still percent-encoded)
+    loadint r16, 1            ; filter found
+    jump param_next
+
+pk_i:
+    ; index=<name> — select which preloaded snapshot to search. The value is a
+    ; bare collection name (letters/digits), never a path: it indexes a fixed
+    ; operator-config roster of handles, so it can't address the filesystem.
+    ; r29 = value start (transient). Empty/unknown name resolves to the default
+    ; index in the resolver below. Token capped at 32 bytes.
+    loadint r26, 1
+    add r41, r41, r26         ; past 'i' -> 'n'
+    strbyte r25, r4, r41
+    loadint r26, 110          ; 'n'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'd'
+    strbyte r25, r4, r41
+    loadint r26, 100          ; 'd'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'e'
+    strbyte r25, r4, r41
+    loadint r26, 101          ; 'e'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> 'x'
+    strbyte r25, r4, r41
+    loadint r26, 120          ; 'x'
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> '='
+    strbyte r25, r4, r41
+    loadint r26, 61           ; '='
+    eq r27, r25, r26
+    jumpifn r27, pk_skip
+    loadint r26, 1
+    add r41, r41, r26         ; -> first value char
+    move r29, r41             ; index name value start
+scan_index:
+    strbyte r25, r4, r41
+    eq r27, r25, r21          ; NUL / end of line
+    jumpif r27, scan_index_done
+    loadint r26, 32           ; space
+    eq r27, r25, r26
+    jumpif r27, scan_index_done
+    loadint r26, 38           ; '&'
+    eq r27, r25, r26
+    jumpif r27, scan_index_done
+    loadint r26, 1
+    add r41, r41, r26
+    sub r28, r41, r29
+    loadint r26, 32           ; cap name token at 32 bytes
+    lt r27, r28, r26
+    jumpif r27, scan_index
+scan_index_done:
+    sub r36, r41, r29         ; name length
+    eq r28, r36, r21          ; empty value -> leave r66="" (default index)
+    jumpif r28, param_next
+    shl r37, r29, r24         ; start << 16
+    or  r37, r37, r36         ; | length
+    substr r66, r4, r37       ; index name token
+    jump param_next
+
 pk_skip:
     ; skip an unrecognized param: scan from cursor to next '&'/space/NUL,
     ; then let param_next decide whether more params follow.
@@ -406,12 +565,35 @@ pk_skip:
     jump pk_skip
 
 scan_finish:
+    ; require q OR filter; neither -> 400. (filter-only search is valid.)
     loadint r26, 0
-    eq r27, r48, r26          ; q found ?
-    jumpif r27, route_400_q   ; no q in any param -> missing q
+    eq r27, r48, r26          ; q not found?
+    jumpifn r27, sf_decode    ; q found -> proceed
+    eq r27, r16, r26          ; filter not found either?
+    jumpif r27, route_400_q   ; neither q nor filter -> missing required param
+sf_decode:
     url_decode r50, r50       ; '+'/%XX -> bytes; strips CR/LF/quote/backslash
-    eq r27, r34, r26
-    jumpif r27, route_search_ok    ; bm25 (live)
+    ; ---- resolve index name (r66) -> search handle (r64) + effective name (r67) ----
+    ; Default is index.snap (r60). A known name maps to its preloaded handle; an
+    ; absent or unknown name falls back to the default and the echoed `index`
+    ; field reports which collection actually answered.
+    move r64, r60             ; default handle
+    loadk r67, "default"      ; effective index name (echoed back)
+    loadk r25, "b"
+    strcmp r27, r66, r25
+    jumpifn r27, sf_idx_b     ; matched "b"
+    jump sf_idx_done
+sf_idx_b:
+    move r64, r63
+    loadk r67, "b"
+sf_idx_done:
+    loadint r26, 0
+    eq r27, r34, r26          ; bm25 mode?
+    jumpifn r27, sf_notbm25
+    eq r27, r16, r26          ; filter NOT found? (r16==0)
+    jumpif r27, route_search_ok    ; plain BM25 (live)
+    jump route_search_filter       ; Boolean/filter path (live)
+sf_notbm25:
     loadint r26, 1
     eq r27, r34, r26
     jumpif r27, route_501_vector
@@ -479,7 +661,7 @@ route_llms:
     tcp_write r3, r30
     loadk r30, ""
     tcp_write r3, r30
-    loadk r30, "- [Search API](/search?q=): Ranked full-text search over the live index. GET or POST; q is the query string; k is optional (max results, default 10). Returns JSON with total and a hits array of id and score."
+    loadk r30, "- [Search API](/search?q=): Ranked search over the live index. GET or POST. q is a full-text (BM25) query; filter is an optional Boolean expression (AND/OR, parentheses, = != < <= > >= over indexed columns) that can refine q or be used alone; index optionally selects a named collection (default index when absent or unknown; the response echoes the index that answered); k is optional (max results, default 10). Returns JSON with total and a hits array; each hit has id, score, and text (a snippet of the matched document)."
     tcp_write r3, r30
     loadk r30, "- [Health](/health): Liveness probe. Returns JSON status ok plus service name and version."
     tcp_write r3, r30
@@ -527,19 +709,23 @@ route_mcp:
     tcp_write r3, r30
     loadk r30, "\"tools\":[{\"name\":\"search\","
     tcp_write r3, r30
-    loadk r30, "\"description\":\"Run a ranked full-text search and return matching document ids with scores.\","
+    loadk r30, "\"description\":\"Run a ranked full-text search and return matching documents with id, score, and a text snippet of each match. Pass q for full-text (BM25), filter for a Boolean expression, or both to restrict a full-text query.\","
     tcp_write r3, r30
     loadk r30, "\"endpoint\":\"/search\",\"method\":\"GET\","
     tcp_write r3, r30
     loadk r30, "\"inputSchema\":{\"type\":\"object\","
     tcp_write r3, r30
-    loadk r30, "\"properties\":{\"q\":{\"type\":\"string\",\"description\":\"The search query.\"},"
+    loadk r30, "\"properties\":{\"q\":{\"type\":\"string\",\"description\":\"The full-text search query (BM25). Optional if filter is given.\"},"
+    tcp_write r3, r30
+    loadk r30, "\"filter\":{\"type\":\"string\",\"description\":\"A Boolean filter expression over indexed columns (AND/OR, parentheses, and = != < <= > >= comparisons; column-index addressed). Combine with q or use alone.\"},"
     tcp_write r3, r30
     loadk r30, "\"k\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"default\":10,\"description\":\"Max results.\"},"
     tcp_write r3, r30
+    loadk r30, "\"index\":{\"type\":\"string\",\"default\":\"default\",\"description\":\"Which named index (collection) to search. Absent or unknown falls back to the default index; the response echoes the index that answered.\"},"
+    tcp_write r3, r30
     loadk r30, "\"mode\":{\"type\":\"string\",\"enum\":[\"bm25\"],\"default\":\"bm25\",\"description\":\"Retrieval mode; only bm25 is live in this binary.\"}},"
     tcp_write r3, r30
-    loadk r30, "\"required\":[\"q\"]}}],"
+    loadk r30, "\"anyOf\":[{\"required\":[\"q\"]},{\"required\":[\"filter\"]}]}}],"
     tcp_write r3, r30
     loadk r30, "\"transport\":{\"http\":{\"baseUrl\":\"/\"},"
     tcp_write r3, r30
@@ -567,11 +753,11 @@ route_search_ok:
     ; ---- real retrieval via read-only db_search (BM25) ----
     ; If no index loaded at boot (r60 < 0), fall back to empty hits so the
     ; service still answers structurally-valid JSON.
-    lt r52, r60, r21              ; hid < 0 ?
+    lt r52, r64, r21              ; resolved hid < 0 ?
     jumpif r52, search_noindex
 
     loadint r53, 48
-    shl r54, r60, r53             ; hid << 48
+    shl r54, r64, r53             ; hid << 48
     or r54, r54, r19              ; | k  (tid=0, col=0)  packed config
     db_search r51, r54, r50       ; r51 = "total":N,"hits":[...]
 
@@ -580,7 +766,10 @@ route_search_ok:
     loadk r57, "\",\"k\":"
     concat r58, r56, r57
     concat r58, r58, r39          ; effective k (string)
-    loadk r57, ",\"mode\":\"bm25\",\"took_ms\":0,"
+    loadk r57, ",\"index\":\""
+    concat r58, r58, r57
+    concat r58, r58, r67          ; effective index name
+    loadk r57, "\",\"mode\":\"bm25\",\"took_ms\":0,"
     concat r58, r58, r57
     concat r58, r58, r51          ; append "total":N,"hits":[...]
     loadk r59, "}"
@@ -594,7 +783,68 @@ search_noindex:
     loadk r57, "\",\"k\":"
     concat r58, r56, r57
     concat r58, r58, r39          ; effective k (string)
-    loadk r57, ",\"mode\":\"bm25\",\"took_ms\":0,\"total\":0,\"hits\":[]}"
+    loadk r57, ",\"index\":\""
+    concat r58, r58, r57
+    concat r58, r58, r67          ; effective index name
+    loadk r57, "\",\"mode\":\"bm25\",\"took_ms\":0,\"total\":0,\"hits\":[]}"
+    concat r58, r58, r57
+    tcp_write r3, r58
+    jump close_client
+
+route_search_filter:
+    loadk r30, "HTTP/1.1 200 OK"
+    tcp_write r3, r30
+    loadk r30, "Content-Type: application/json; charset=utf-8"
+    tcp_write r3, r30
+    loadk r30, "Access-Control-Allow-Origin: *"
+    tcp_write r3, r30
+    loadk r30, "Server: CuttleSearch/0.8.0"
+    tcp_write r3, r30
+    loadk r30, "X-Content-Type-Options: nosniff"
+    tcp_write r3, r30
+    loadk r30, "Cache-Control: no-store"
+    tcp_write r3, r30
+    loadk r30, "Connection: close"
+    tcp_write r3, r30
+    loadk r30, ""
+    tcp_write r3, r30
+    ; ---- read-only Boolean/filter retrieval via db_bsearch (BSEARCH verb) ----
+    ; The BSEARCH verb is hardcoded in C, so this path is read-only by
+    ; construction. db_bsearch decodes + DSL-sanitizes the raw filter (r17)
+    ; and, when q is present (r50), AND-joins it as the BM25 scoring atom.
+    lt r52, r64, r21              ; resolved hid < 0 ? (no index loaded)
+    jumpif r52, filter_noindex
+    loadint r53, 48
+    shl r54, r64, r53             ; hid << 48
+    or r54, r54, r19              ; | k  (tid=0, col=0) packed config
+    move r51, r17                 ; R[A] in = raw (percent-encoded) filter expr
+    db_bsearch r51, r54, r50      ; r51 = "total":N,"hits":[...]
+    loadk r55, "{\"query\":\""
+    concat r56, r55, r50
+    loadk r57, "\",\"k\":"
+    concat r58, r56, r57
+    concat r58, r58, r39          ; effective k (string)
+    loadk r57, ",\"index\":\""
+    concat r58, r58, r57
+    concat r58, r58, r67          ; effective index name
+    loadk r57, "\",\"mode\":\"filter\",\"took_ms\":0,"
+    concat r58, r58, r57
+    concat r58, r58, r51          ; append "total":N,"hits":[...]
+    loadk r59, "}"
+    concat r58, r58, r59
+    tcp_write r3, r58
+    jump close_client
+
+filter_noindex:
+    loadk r55, "{\"query\":\""
+    concat r56, r55, r50
+    loadk r57, "\",\"k\":"
+    concat r58, r56, r57
+    concat r58, r58, r39          ; effective k (string)
+    loadk r57, ",\"index\":\""
+    concat r58, r58, r57
+    concat r58, r58, r67          ; effective index name
+    loadk r57, "\",\"mode\":\"filter\",\"took_ms\":0,\"total\":0,\"hits\":[]}"
     concat r58, r58, r57
     tcp_write r3, r58
     jump close_client
@@ -625,7 +875,7 @@ route_400_q:
     tcp_write r3, r30
     loadk r30, ""
     tcp_write r3, r30
-    loadk r30, "{\"error\":{\"code\":\"bad_request\",\"message\":\"missing required parameter: q\"}}"
+    loadk r30, "{\"error\":{\"code\":\"bad_request\",\"message\":\"missing required parameter: provide q (full-text) or filter (Boolean)\"}}"
     tcp_write r3, r30
     jump close_client
 

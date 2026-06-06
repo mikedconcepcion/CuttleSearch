@@ -149,7 +149,7 @@ tagged with where it should live.
 | Faceting / aggregations (counts per facet value over a filtered set) | program layer | **Verify** | CuttleDB has GROUP BY + O(1) COUNT; facet-count UX likely composes, confirm in Sprint 4. |
 | Relevance tuning (field boosts, ranking rules, fusion knobs) | program layer | **No (mostly)** | Re-weight above RRF; only a per-field-weight knob would touch the engine. |
 | Pagination / sort by arbitrary field | program layer | **Verify** | Compose `SELECT` + sort; confirm large-offset cost. |
-| Multi-index / multi-tenant scoping | program layer + `AUTH` | **No (mostly)** | index = table/handle; scoped access via per-handle AUTH. |
+| Multi-index / multi-tenant scoping | program layer + `AUTH` | **Routing done (v0.9.0 #3); AUTH scoping open** | index = named handle in a fixed boot-loaded roster; `?index=` routes by name with default-fallback. Per-handle AUTH scoping still pending (Sprint 6). |
 | Agent-native progressive disclosure (token-budgeted responses) | program layer (API formatter) | **No** | Response-shaping; the old "compass" idea, demoted to one feature. |
 | Admin console | embedded HTML+JS | **No** | Thin operator surface. |
 
@@ -279,8 +279,22 @@ backends now rank the same corpus next to the reference engine, so the
 ### Sprint 2 — query DSL + search API
 - [ ] Query DSL (filters + sort + pagination), compiled to
   `BSEARCH`/`SEARCH`/`KNN` wire verbs.
+- [x] **Boolean `filter=` param (v0.9.0 #2).** `/search?filter=<expr>`
+  accepts a Boolean DSL (column-index-addressed predicates, AND/OR/parens,
+  numeric + exact-match string equality) compiled to the read-only
+  `BSEARCH` verb via a new `OP_DB_BSEARCH` opcode that HARDCODES the verb
+  (no request can select a write path). Combines with `q` as faceted
+  ranking (filter selects candidates, `q` ranks within, RRF-fused).
+  Sort/pagination still open. Verified: 57/57 C tests, bootstrap
+  byte-identical, 8/8 curl scenarios incl. CRLF-injection neutralized.
 - [ ] REST + agent API: one documented contract, local-first, no auth on
   `localhost`.
+- [x] **Content in hits** — each hit now carries `text` (the matched
+  document's indexed cell, JSON-escaped, snippet-capped ~280 B,
+  UTF-8-boundary-safe) alongside `id`/`score`. Pure-engine change in the
+  read-only `OP_DB_SEARCH` opcode (`cuttledb_get_str_cell_json`); no new
+  wire verb, no write path. Makes results usable without a second GET and
+  is the substrate for Sprint-4 highlighting.
 - [ ] **Decide DSL dialect** — invent vs. speak a subset of an existing
   one (ES Query DSL / Meilisearch params) for drop-in adoption. *(Still
   open; see §5.)*
@@ -325,7 +339,25 @@ Structured-token sub-gate **met** (decisive A/B on `corpus_struct`).
 **Gate:** documented knob moves the metric in the documented direction.
 
 ### Sprint 6 — multi-index + paired (attached) mode
-- [ ] Multiple indexes, scoped access (per-handle AUTH).
+- [x] **Multi-index routing (v0.9.0 #3).** One process loads N named
+  snapshots at boot (`default`, `b`, …), each into its own read-only
+  handle; `/search?index=<name>` routes by name against a **fixed
+  in-memory roster**. Unknown/absent/empty names fall back to the default
+  index and the response **echoes** the `index` that answered. The name
+  never touches the filesystem, so `index=../index` is harmless (path
+  traversal is structurally impossible). Pure `.oasm` — no new C, no new
+  wire verb. Verified: 13/13 curl scenarios (corpus separation, fallback,
+  back-compat, param-order independence, filter+index, path-traversal
+  safety). *(Per-handle AUTH scoping still open below.)*
+- [x] **v0.9.0 audit + harden.** Full source pass of every parse/route
+  path; injection, path-traversal, length-bound and overflow surfaces
+  confirmed solid. Latency (loopback): p50 ~0.39ms, p99 <1.05ms across all
+  routes; named-index resolution adds no measurable overhead. Two
+  robustness fixes: an empty `q=` alongside a `filter` is now treated as
+  *absent* (filter-only stays valid) rather than rejected; a malformed `k`
+  (e.g. `k=5x`) honors its leading digits and no longer drops the params
+  that follow it. Verify + regression suite green.
+- [ ] Scoped access to indexes (per-handle AUTH).
 - [ ] **Attached mode:** point at an external CuttleDB; CuttleDB governs
   public/private surfacing. In-process fast path when co-located.
 
