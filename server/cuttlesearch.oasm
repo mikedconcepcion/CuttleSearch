@@ -612,7 +612,7 @@ route_health:
     tcp_write r3, r30
     loadk r30, "Access-Control-Allow-Origin: *"
     tcp_write r3, r30
-    loadk r30, "Server: CuttleSearch/0.8.0"
+    loadk r30, "Server: CuttleSearch/0.9.0"
     tcp_write r3, r30
     loadk r30, "X-Content-Type-Options: nosniff"
     tcp_write r3, r30
@@ -622,7 +622,7 @@ route_health:
     tcp_write r3, r30
     loadk r30, ""
     tcp_write r3, r30
-    loadk r30, "{\"status\":\"ok\",\"service\":\"cuttlesearch\",\"version\":\"0.8.0\"}"
+    loadk r30, "{\"status\":\"ok\",\"service\":\"cuttlesearch\",\"version\":\"0.9.0\"}"
     tcp_write r3, r30
     jump close_client
 
@@ -635,7 +635,7 @@ route_llms:
     tcp_write r3, r30
     loadk r30, "Access-Control-Allow-Origin: *"
     tcp_write r3, r30
-    loadk r30, "Server: CuttleSearch/0.8.0"
+    loadk r30, "Server: CuttleSearch/0.9.0"
     tcp_write r3, r30
     loadk r30, "X-Content-Type-Options: nosniff"
     tcp_write r3, r30
@@ -693,7 +693,7 @@ route_mcp:
     tcp_write r3, r30
     loadk r30, "Access-Control-Allow-Origin: *"
     tcp_write r3, r30
-    loadk r30, "Server: CuttleSearch/0.8.0"
+    loadk r30, "Server: CuttleSearch/0.9.0"
     tcp_write r3, r30
     loadk r30, "X-Content-Type-Options: nosniff"
     tcp_write r3, r30
@@ -703,7 +703,7 @@ route_mcp:
     tcp_write r3, r30
     loadk r30, ""
     tcp_write r3, r30
-    loadk r30, "{\"name\":\"cuttlesearch\",\"version\":\"0.8.0\","
+    loadk r30, "{\"name\":\"cuttlesearch\",\"version\":\"0.9.0\","
     tcp_write r3, r30
     loadk r30, "\"description\":\"Read-only full-text BM25 search over a pre-built index.\","
     tcp_write r3, r30
@@ -740,7 +740,7 @@ route_search_ok:
     tcp_write r3, r30
     loadk r30, "Access-Control-Allow-Origin: *"
     tcp_write r3, r30
-    loadk r30, "Server: CuttleSearch/0.8.0"
+    loadk r30, "Server: CuttleSearch/0.9.0"
     tcp_write r3, r30
     loadk r30, "X-Content-Type-Options: nosniff"
     tcp_write r3, r30
@@ -798,7 +798,7 @@ route_search_filter:
     tcp_write r3, r30
     loadk r30, "Access-Control-Allow-Origin: *"
     tcp_write r3, r30
-    loadk r30, "Server: CuttleSearch/0.8.0"
+    loadk r30, "Server: CuttleSearch/0.9.0"
     tcp_write r3, r30
     loadk r30, "X-Content-Type-Options: nosniff"
     tcp_write r3, r30
@@ -903,7 +903,7 @@ route_501_vector:
     tcp_write r3, r30
     loadk r30, "Access-Control-Allow-Origin: *"
     tcp_write r3, r30
-    loadk r30, "Server: CuttleSearch/0.8.0"
+    loadk r30, "Server: CuttleSearch/0.9.0"
     tcp_write r3, r30
     loadk r30, "Connection: close"
     tcp_write r3, r30
@@ -920,7 +920,7 @@ route_501_hybrid:
     tcp_write r3, r30
     loadk r30, "Access-Control-Allow-Origin: *"
     tcp_write r3, r30
-    loadk r30, "Server: CuttleSearch/0.8.0"
+    loadk r30, "Server: CuttleSearch/0.9.0"
     tcp_write r3, r30
     loadk r30, "Connection: close"
     tcp_write r3, r30

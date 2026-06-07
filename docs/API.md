@@ -21,7 +21,7 @@ Liveness probe. No auth, no query.
 
 ```
 $ curl -s http://HOST:8787/health
-{"status":"ok","service":"cuttlesearch","version":"0.8.0"}
+{"status":"ok","service":"cuttlesearch","version":"0.9.0"}
 ```
 
 Always `200`. Use this for container/orchestrator health checks.
@@ -217,7 +217,7 @@ its input schema, so an agent can self-configure without hard-coding the API.
 
 ```
 $ curl -s http://HOST:8787/mcp.json
-{"name":"cuttlesearch","version":"0.8.0",
+{"name":"cuttlesearch","version":"0.9.0",
  "description":"Read-only full-text BM25 search over a pre-built index.",
  "tools":[{"name":"search","endpoint":"/search","method":"GET",
            "inputSchema":{"type":"object",

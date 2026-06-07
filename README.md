@@ -12,17 +12,23 @@ Elasticsearch / Meilisearch / Typesense lane. It indexes documents and
 serves ranked search over them. Both humans and LLM agents are
 first-class clients of the same open API.
 
-> **Status — v0.8.0.** The shipped binary (`server/cuttlesearch.obin` on
-> the `cuttledb-server` engine) serves **read-only BM25** search today —
-> `GET /health`, `GET`/`POST /search`. Vector + hybrid ranking, the
-> structured-token analyzer, the query DSL, and attached mode are proven
-> in the dependency-free reference engine + bench and are being brought
-> into the binary along the [roadmap](ROADMAP.md). The feature sections
-> below describe the product target; this callout is the ground truth of
-> the binary right now.
+> **Status — v0.9.0.** The shipped binary (`server/cuttlesearch.obin` on
+> the `cuttledb-server` engine) serves **read-only** search today —
+> `GET /health`, `GET`/`POST /search`, plus `GET /llms.txt` and
+> `GET /mcp.json` for agent discovery. Retrieval covers BM25 full-text
+> (`q`), a Boolean `filter=` expression over indexed columns, and
+> **multi-index routing** (`index=`); every hit now carries the matched
+> document's `text` snippet alongside `id`/`score`. Vector + hybrid
+> ranking, the structured-token analyzer, the query DSL (sort /
+> pagination), and attached mode are proven in the dependency-free
+> reference engine + bench and are being brought into the binary along
+> the [roadmap](ROADMAP.md). The feature sections below describe the
+> product target; this callout is the ground truth of the binary right
+> now.
 
-See [DEFINITION.md](DEFINITION.md) for what it is (and isn't), and
-[ROADMAP.md](ROADMAP.md) for where it's going.
+See [DEFINITION.md](DEFINITION.md) for what it is (and isn't),
+[ROADMAP.md](ROADMAP.md) for where it's going, and
+[CHANGELOG.md](CHANGELOG.md) for what shipped when.
 
 ## How it ships
 

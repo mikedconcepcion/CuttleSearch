@@ -107,8 +107,8 @@ base image — no compiler, no source, ~tens of MB:
 
 ```bash
 # bin/cuttledb-server must be a LINUX build of the engine (see bin/README.md).
-docker build -f deploy/Dockerfile -t cuttlesearch:0.8.0 .
-docker run --rm -p 8787:8787 cuttlesearch:0.8.0
+docker build -f deploy/Dockerfile -t cuttlesearch:0.9.0 .
+docker run --rm -p 8787:8787 cuttlesearch:0.9.0
 ```
 
 The image is read-only-friendly: run it with `--read-only --tmpfs /tmp` and the

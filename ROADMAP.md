@@ -104,7 +104,7 @@ in *what CuttleSearch is allowed to add*:
 
 ## 2. What it's built ON — substrate that exists today
 
-These ship in CuttleDB **now** (v0.8.0, verified in `FEATURES.md`).
+These ship in CuttleDB **now** (v0.9.0, verified in `FEATURES.md`).
 CuttleSearch composes them; it does not re-implement them.
 
 - **Storage / data model** — typed columns (int, float, string, vector,

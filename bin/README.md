@@ -36,7 +36,7 @@ This is the **same engine CuttleDB ships** — `cuttledb-server` carries the
 column store, the read-only retrieval opcodes (`db_load`, `db_search`,
 `url_decode`), and the wire protocol that both products rely on. Because it is
 one shared binary, CuttleSearch and CuttleDB move together on one version line
-(both `0.8.0`).
+(both `0.9.0`).
 
 ## Getting the binary
 
@@ -52,7 +52,7 @@ it into `bin/`:
 The release binaries are sigstore-signed (`.cosign.bundle` files attached to the
 release); verify before use. Until the binary is present, `scripts/run.*` and the
 container build fail at the missing-binary step (`COPY bin/cuttledb-server`) — by
-design, so a mismatched-platform binary never ships silently. The v0.8.0 engine is
+design, so a mismatched-platform binary never ships silently. The v0.9.0 engine is
 released once for both CuttleDB and CuttleSearch: one shared binary, one version line.
 
 Nothing else needs to be checked in here — the assembled program
