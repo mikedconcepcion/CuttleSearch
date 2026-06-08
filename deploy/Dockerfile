@@ -7,8 +7,8 @@
 #   bin/cuttledb-server  MUST be a LINUX (glibc) build of the engine for this image.
 #
 # Build context is the repo root:
-#   docker build -f deploy/Dockerfile -t cuttlesearch:0.8.0 .
-#   docker run --rm --read-only --tmpfs /tmp -p 8787:8787 cuttlesearch:0.8.0
+#   docker build -f deploy/Dockerfile -t cuttlesearch:0.9.0 .
+#   docker run --rm --read-only --tmpfs /tmp -p 8787:8787 cuttlesearch:0.9.0
 
 FROM debian:bookworm-slim
 
